@@ -14,9 +14,44 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-	title: "Arena God Tracker",
+	metadataBase: new URL("https://www.arenagod.click"),
+	title: {
+		default: "Arena God Tracker",
+		template: "%s | ArenaGod.click",
+	},
 	description:
 		"Allows you to track your progress in achieving the Arena God title. Automatically tracks your wins in arena too.",
+	openGraph: {
+		title: "Arena God Tracker",
+		description:
+			"Allows you to track your progress in achieving the Arena God title. Automatically tracks your wins in arena too.",
+		type: "website",
+		url: "/",
+		siteName: "ArenaGod.click",
+		images: [
+			{
+				url: "/og-image.png",
+				alt: "ArenaGod",
+			},
+		],
+	},
+	twitter: {
+		card: "summary_large_image",
+		title: "Arena God Tracker",
+		description:
+			"Allows you to track your progress in achieving the Arena God title. Automatically tracks your wins in arena too.",
+		images: ["/og-image.png"],
+	},
+	icons: {
+		icon: "/favicon.ico",
+	},
+	alternates: {
+		canonical: "/",
+	},
+	robots: {
+		index: true,
+		follow: true,
+	},
 };
 
 export default function RootLayout({
