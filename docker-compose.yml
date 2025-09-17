@@ -1,0 +1,36 @@
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    container_name: n8n
+    restart: always
+    ports:
+      - "5678:5678"
+    env_file:
+      - .env
+    environment:
+      # Additional environment variables can be added here
+      - NODE_ENV=production
+      
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./local-files:/files
+    
+    # Optional: Use PostgreSQL instead of SQLite for better performance
+    # depends_on:
+    #   - postgres
+
+  # Uncomment this section if you want to use PostgreSQL
+  # postgres:
+  #   image: postgres:13
+  #   container_name: n8n_postgres
+  #   restart: always
+  #   environment:
+  #     POSTGRES_DB: n8n
+  #     POSTGRES_USER: n8n
+  #     POSTGRES_PASSWORD: n8n_password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  n8n_data:
+  # postgres_data:  # Uncomment if using PostgreSQL
