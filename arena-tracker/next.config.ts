@@ -7,6 +7,11 @@ const nextConfig: NextConfig = {
         protocol: "https",
         hostname: "ddragon.leagueoflegends.com",
       },
+      // Allow CommunityDragon raw assets (augment icons)
+      {
+        protocol: "https",
+        hostname: "raw.communitydragon.org",
+      },
     ],
   },
 };

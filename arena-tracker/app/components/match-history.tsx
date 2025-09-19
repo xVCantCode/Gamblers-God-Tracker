@@ -19,6 +19,11 @@ import {
 	getFirstSeasonMatchId,
 	setFirstSeasonMatchId,
 	removeFromMatchCache,
+	// NEW: history scope helpers
+	getHistoryScope,
+	setHistoryScope,
+	getHistoryLimit,
+	setHistoryLimit,
 } from "../lib/storage";
 import {
 	getRiotAccount,
@@ -60,8 +65,75 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 	const [matchCount, setMatchCount] = useState(100); // Riot's maximum per call for optimal pagination
 	const [hasMoreMatches, setHasMoreMatches] = useState(true);
 	const [startIndex, setStartIndex] = useState(0);
+	// Define local type for history scope
+	 type HistoryScope = "all" | "last_n";
+	// NEW: persisted history limiting state
+	const [historyScope, setHistoryScopeState] = useState<HistoryScope>("all");
+	const [historyLimit, setHistoryLimitState] = useState<number>(100);
 	// Track when initial local storage load has completed to avoid race with auto-refresh
 	const [initialized, setInitialized] = useState(false);
+	// Arena augment mapping (id -> { name, iconUrl }) from CommunityDragon
+	// Arena augment mapping (id -> metadata) from CommunityDragon
+	const [augmentMap, setAugmentMap] = useState<Record<number, { name?: string; desc?: string; icon: string; iconLarge?: string }>>({});
+	// Load augment metadata (icon URLs, names, descriptions) from CommunityDragon once
+	useEffect(() => {
+		let cancelled = false;
+		async function loadAugments() {
+			try {
+				const endpoints = [
+					"https://raw.communitydragon.org/15.18/cdragon/arena/en_us.json",
+				];
+				let data: any = null;
+				let assetBase = "https://raw.communitydragon.org/latest";
+				for (const url of endpoints) {
+					try {
+						const res = await fetch(url, { cache: "force-cache" });
+						if (res.ok) {
+							data = await res.json();
+							const idx = url.indexOf("/cdragon/");
+							if (idx > -1) assetBase = url.substring(0, idx);
+							break;
+						}
+					} catch {}
+				}
+				if (!data) return;
+				const items: any[] = Array.isArray(data)
+					? data
+					: Array.isArray((data as any).augments)
+						? (data as any).augments
+						: Array.isArray((data as any).Augments)
+							? (data as any).Augments
+							: [];
+				const map: Record<number, { name?: string; desc?: string; icon: string; iconLarge?: string }> = {};
+				for (const it of items) {
+					const id = typeof it?.id === "number" ? it.id : typeof it?.AugmentId === "number" ? it.AugmentId : undefined;
+					const name = typeof it?.name === "string" ? it.name : typeof it?.Name === "string" ? it.Name : undefined;
+					const desc = typeof it?.description === "string" ? it.description : typeof it?.desc === "string" ? it.desc : typeof it?.Desc === "string" ? it.Desc : typeof it?.tooltip === "string" ? it.tooltip : undefined;
+					const iconRel = typeof it?.iconPath === "string" ? it.iconPath : typeof it?.icon === "string" ? it.icon : typeof it?.Icon === "string" ? it.Icon : undefined;
+					const iconLargeRel = typeof it?.iconLargePath === "string" ? it.iconLargePath : typeof it?.iconLarge === "string" ? it.iconLarge : typeof it?.IconLarge === "string" ? it.IconLarge : undefined;
+					if (typeof id === "number" && (iconRel || iconLargeRel)) {
+						const normalized = iconRel ? iconRel.replace(/\\/g, "/") : undefined;
+						let cleaned = normalized ? (normalized.startsWith("/") ? normalized : `/${normalized}`) : undefined;
+						// CommunityDragon binary assets are under /game; icon paths come as /assets/... so prefix when needed
+						if (cleaned && !cleaned.startsWith("/game/") && cleaned.startsWith("/assets/")) cleaned = `/game${cleaned}`;
+						const largeNormalized = iconLargeRel ? iconLargeRel.replace(/\\/g, "/") : undefined;
+						let largeCleaned = largeNormalized ? (largeNormalized.startsWith("/") ? largeNormalized : `/${largeNormalized}`) : undefined;
+						if (largeCleaned && !largeCleaned.startsWith("/game/") && largeCleaned.startsWith("/assets/")) largeCleaned = `/game${largeCleaned}`;
+						const smallUrl = cleaned ? `${assetBase}${cleaned}` : undefined;
+						const largeUrl = largeCleaned ? `${assetBase}${largeCleaned}` : undefined;
+						map[id] = { name, desc, icon: smallUrl ?? largeUrl ?? "", iconLarge: largeUrl };
+					}
+				}
+				if (!cancelled) setAugmentMap(map);
+			} catch {}
+		}
+
+		loadAugments();
+		return () => { cancelled = true; };
+	}, []);
+	const getAugmentIconUrl = useCallback((id: number) => augmentMap[id]?.iconLarge || augmentMap[id]?.icon, [augmentMap]);
+	const getAugmentName = useCallback((id: number) => augmentMap[id]?.name || `Augment ${id}`,[augmentMap]);
+	const getAugmentDesc = useCallback((id: number) => augmentMap[id]?.desc,[augmentMap]);
 	useEffect(() => {
 		const storedRiotId = getRiotId();
 		if (storedRiotId) {
@@ -73,6 +145,13 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 		setMatchHistoryState(existing);
 		// Ensure pagination continues from stored history size
 		setStartIndex(existing.length);
+		// Load persisted history settings
+		try {
+			const scope = getHistoryScope();
+			const limit = getHistoryLimit();
+			setHistoryScopeState(scope);
+			setHistoryLimitState(limit);
+		} catch {}
 		setInitialized(true);
 	}, []);
 
@@ -260,7 +339,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 			setIsLoading(false);
 			setIsLoadingMore(false);
 		}
-	}, [gameName, tagLine, matchCount, startIndex, matchHistory]);
+	}, [gameName, tagLine, matchCount, startIndex, matchHistory, historyScope, historyLimit]);
 
 	// Auto-load data for Gambler#Adict on first visit
 	useEffect(() => {
@@ -392,7 +471,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 	  } catch (e) {
 	    console.error("Auto-refresh failed:", e);
 	  }
-	}, [gameName, tagLine, matchHistory]);
+	}, [gameName, tagLine, matchHistory, historyScope, historyLimit]);
 
 	// NEW: drop past games (start fresh from a selected match or the most recent by default)
 	const handleDropPastGames = useCallback((cutoffMatchId?: string) => {
@@ -432,10 +511,16 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
  	  if (seasonStartId) {
  	    const idx = allMatches.findIndex(m => m.matchId === seasonStartId);
  	    if (idx >= 0) {
- 	      matchesToCount = allMatches.slice(0, idx + 1); // newest-first, include the cutoff match
+ 	      matchesToCount = allMatches.slice(0, idx + 1);
  	    }
  	  }
  
+ 	  // Apply history scope limiting (All time vs Last N games)
+ 	  if (historyScope === "last_n") {
+ 	    const n = Math.max(1, Math.min(500, Number(historyLimit) || 100));
+ 	    matchesToCount = matchesToCount.slice(0, n);
+ 	  }
+
  	  const championsPlayed = new Set<string>();
  	  const championsWithWins = new Set<string>();
  	  const championsWithTop4s = new Set<string>();
@@ -530,6 +615,46 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
  	          placeholder="100"
  	        />
  	      </div>
+ 	      {/* NEW: History scope controls */}
+ 	      <div className="flex items-end gap-2">
+ 	        <div>
+ 	          <label htmlFor="historyScope" className="block text-sm font-medium mb-1">Progress Scope</label>
+ 	          <select
+ 	            id="historyScope"
+ 	            value={historyScope}
+ 	            onChange={(e) => {
+ 	              const scope = (e.target.value as HistoryScope);
+ 	              setHistoryScopeState(scope);
+ 	              try { setHistoryScope(scope); } catch {}
+ 	              // Recompute immediately using the same history
+ 	              rebuildArenaProgressFromHistory(matchHistory);
+ 	            }}
+ 	            className="px-3 py-2 border rounded-md dark:bg-gray-800 dark:border-gray-700"
+ 	          >
+ 	            <option value="all">All time</option>
+ 	            <option value="last_n">Last N games</option>
+ 	          </select>
+ 	        </div>
+ 	        <div className="flex-shrink-0">
+ 	          <label htmlFor="historyLimit" className="block text-sm font-medium mb-1">Count</label>
+ 	          <input
+ 	            type="number"
+ 	            id="historyLimit"
+ 	            value={historyLimit}
+ 	            onChange={(e) => {
+ 	              const val = Math.max(1, Math.min(500, parseInt(e.target.value) || 100));
+ 	              setHistoryLimitState(val);
+ 	              try { setHistoryLimit(val); } catch {}
+ 	              rebuildArenaProgressFromHistory(matchHistory);
+ 	            }}
+ 	            min={1}
+ 	            max={500}
+ 	            disabled={historyScope !== "last_n"}
+ 	            className="w-24 px-3 py-2 border rounded-md dark:bg-gray-800 dark:border-gray-700 disabled:opacity-50"
+ 	            placeholder="100"
+ 	          />
+ 	        </div>
+ 	      </div>
  	      <div className="flex gap-2">
  	        <button
  	          onClick={() => handleUpdate()}
@@ -613,6 +738,11 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
  	      <h2 className="text-xl font-semibold">
  	        Recent Matches
  	        <span className="text-sm font-normal text-gray-500 ml-2">({displayedMatches.length} matches)</span>
+ 	        {historyScope === "last_n" && (
+ 	          <span className="ml-2 px-2 py-1 text-xs rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-200">
+ 	            Progress counts last {historyLimit}
+ 	          </span>
+ 	        )}
  	      </h2>
  	      {filterChampion && (
  	        <div className="flex items-center gap-2 text-sm">
@@ -645,20 +775,44 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
  	              </div>
  	              <div className="flex-1">
  	                <div className="flex items-center gap-2">
- 	                  <div className="font-medium text-lg">{match.champion}</div>
- 	                  <div className={`px-2 py-1 rounded-full text-white text-sm font-medium ${PLACEMENT_COLORS[match.placement as keyof typeof PLACEMENT_COLORS] || "bg-gray-500 dark:bg-gray-600"}`}>#{match.placement}</div>
- 	                </div>
- 	                <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
- 	                  Match ID: {" "}
- 	                  <a
- 	                    href={buildLeagueOfGraphsMatchUrl(match.matchId)}
- 	                    target="_blank"
- 	                    rel="noopener noreferrer"
- 	                    className="underline text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
- 	                  >
- 	                    {match.matchId}
- 	                  </a>
- 	                </div>
+	                  <div className="font-medium text-lg">{match.champion}</div>
+	                  <div className={`px-2 py-1 rounded-full text-white text-sm font-medium ${PLACEMENT_COLORS[match.placement as keyof typeof PLACEMENT_COLORS] || "bg-gray-500 dark:bg-gray-600"}`}>#{match.placement}</div>
+	                  {typeof match.score === "number" && (
+	                    <div className="ml-2 px-2 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs" title="Arena score">
+	                      Score {match.score}
+	                    </div>
+	                  )}
+	                </div>
+	                <div className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+	                  Match ID: {" "}
+	                  <a
+	                    href={buildLeagueOfGraphsMatchUrl(match.matchId)}
+	                    target="_blank"
+	                    rel="noopener noreferrer"
+	                    className="underline text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
+	                  >
+	                    {match.matchId}
+	                  </a>
+	                </div>
+	                {Array.isArray(match.augments) && match.augments.length > 0 && (
+	                  <div className="mt-2">
+	                    <div className="flex items-center gap-1">
+	                      {match.augments.map((id, idx) => {
+	                        const src = getAugmentIconUrl(id);
+	                        const desc = getAugmentDesc(id);
+	                        const title = desc ? `${getAugmentName(id)}\n\n${desc}` : getAugmentName(id);
+	                        return src ? (
+	                          <div key={`${match.matchId}-aug-${id}-${idx}`} className="relative w-6 h-6" title={title}>
+	                            <Image src={src} alt={getAugmentName(id)} fill sizes="24px" className="object-contain rounded-sm" unoptimized />
+	                          </div>
+	                        ) : (
+	                          <div key={`${match.matchId}-aug-${id}-${idx}`} className="w-6 h-6 bg-gray-200 dark:bg-gray-700 rounded-sm" title={`Augment ${id}`}></div>
+	                        );
+	                      })}
+	                    </div>
+	                    {/* Removed textual augment names row for icons-only UI */}
+	                  </div>
+	                )}
  	              </div>
  	              <button
  	                onClick={() => handleDropPastGames(match.matchId)}

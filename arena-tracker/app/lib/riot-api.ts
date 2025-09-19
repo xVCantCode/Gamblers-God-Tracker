@@ -22,7 +22,8 @@ export const MatchParticipantSchema = z.object({
 	puuid: z.string(),
 	championName: z.string(),
 	placement: z.number(),
-});
+	// passthrough unknown Arena fields like playerAugment1..4, arenaScore, etc.
+}).passthrough();
 
 export const MatchInfoSchema = z.object({
 	info: z.object({
@@ -233,10 +234,34 @@ export function getPlayerMatchResult(
 		return null;
 	}
 
+	// Try to read Arena augment IDs from common participant fields
+	// Known field patterns include: playerAugment1..4 (numbers), or an 'augments' array in some payloads.
+	const pAny = player as unknown as Record<string, any>;
+	const possibleAugments: Array<number | undefined> = [
+		pAny.playerAugment1,
+		pAny.playerAugment2,
+		pAny.playerAugment3,
+		pAny.playerAugment4,
+	];
+	let augments: number[] | undefined = possibleAugments
+		.filter((v) => typeof v === 'number' && isFinite(v) && v > 0)
+		.map((v) => v as number);
+	// Fallback: some payloads might include an array
+	if ((!augments || augments.length === 0) && Array.isArray(pAny.augments)) {
+		augments = (pAny.augments as any[]).filter((v) => typeof v === 'number');
+	}
+
+	// Try to read Arena score from common fields
+	const score: number | undefined = [pAny.arenaScore, pAny.score, pAny.cherryScore]
+		.find((v) => typeof v === 'number');
+
 	const result = {
 		champion: player.championName,
 		placement: player.placement,
 		timestamp: matchInfo.info.gameCreation,
+		// New fields
+		score,
+		augments,
 	};
 	
 	console.log('✅ Match result extracted:', result);

@@ -10,6 +10,9 @@ export interface MatchResult {
 	placement: number;
 	matchId: string;
 	timestamp: number;
+	// New optional fields (backward compatible)
+	score?: number; // Arena score reported by Riot API for the participant
+	augments?: number[]; // Arena augment IDs for the participant
 }
 
 export interface ArenaProgress {

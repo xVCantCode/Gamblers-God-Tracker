@@ -1,17 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const RIOT_API_BASE = "https://europe.api.riotgames.com";
-const RIOT_TOKEN = process.env.RIOT_API_TOKEN;
-
-if (!RIOT_TOKEN) {
-	throw new Error("RIOT_API_TOKEN environment variable is not set");
-}
-
-const headers = {
-	"X-Riot-Token": RIOT_TOKEN,
-};
 
 export async function GET(request: NextRequest) {
+	const RIOT_TOKEN = process.env.RIOT_API_TOKEN;
+	if (!RIOT_TOKEN) {
+		return NextResponse.json(
+			{ error: "RIOT_API_TOKEN environment variable is not set" },
+			{ status: 401 }
+		);
+	}
+
+	const headers = {
+		"X-Riot-Token": RIOT_TOKEN,
+	};
+
 	const searchParams = request.nextUrl.searchParams;
 	const endpoint = searchParams.get("endpoint");
 	const gameName = searchParams.get("gameName");
@@ -42,32 +45,32 @@ export async function GET(request: NextRequest) {
 
 			case "matches":
 			case "matchIds":
-		if (!puuid) {
-			return NextResponse.json(
-				{ error: "PUUID is required" },
-				{ status: 400 }
-			);
-		}
-		const start = searchParams.get("start") || "0";
-		url = `${RIOT_API_BASE}/lol/match/v5/matches/by-puuid/${puuid}/ids?queue=1700&start=${start}&count=${count}`;
-		
-		// Debug pagination parameters
-		console.log('🔍 API Pagination Debug:', {
-			start,
-			count,
-			finalUrl: url
-		});
+				if (!puuid) {
+					return NextResponse.json(
+						{ error: "PUUID is required" },
+						{ status: 400 }
+					);
+				}
+				const start = searchParams.get("start") || "0";
+				url = `${RIOT_API_BASE}/lol/match/v5/matches/by-puuid/${puuid}/ids?queue=1700&start=${start}&count=${count}`;
+
+				// Debug pagination parameters
+				console.log('🔍 API Pagination Debug:', {
+					start,
+					count,
+					finalUrl: url
+				});
 				break;
 
 			case "match":
-			if (!matchId) {
-				return NextResponse.json(
-					{ error: "Match ID is required" },
-					{ status: 400 }
-				);
-			}
-			url = `${RIOT_API_BASE}/lol/match/v5/matches/${matchId}`;
-			break;
+				if (!matchId) {
+					return NextResponse.json(
+						{ error: "Match ID is required" },
+						{ status: 400 }
+					);
+				}
+				url = `${RIOT_API_BASE}/lol/match/v5/matches/${matchId}`;
+				break;
 
 			default:
 				return NextResponse.json(

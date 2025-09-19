@@ -6,9 +6,38 @@ const STORAGE_KEYS = {
 	ARENA_PROGRESS: "arena-god-progress",
 	MATCH_CACHE: "arena-god-match-cache",
 	FIRST_SEASON_MATCH: "arena-god-first-season-match",
+	// New settings keys
+	HISTORY_SCOPE: "arena-god-history-scope",
+	HISTORY_LIMIT: "arena-god-history-limit",
 } as const;
 
 export const ARENA_PROGRESS_UPDATED_EVENT = "arena-progress-updated";
+
+export type HistoryScope = "all" | "last_n";
+
+export function getHistoryScope(): HistoryScope {
+	if (typeof window === "undefined") return "all";
+	const v = localStorage.getItem(STORAGE_KEYS.HISTORY_SCOPE);
+	return v === "last_n" ? "last_n" : "all";
+}
+
+export function setHistoryScope(scope: HistoryScope) {
+	if (typeof window === "undefined") return;
+	localStorage.setItem(STORAGE_KEYS.HISTORY_SCOPE, scope);
+}
+
+export function getHistoryLimit(): number {
+	if (typeof window === "undefined") return 100;
+	const v = parseInt(localStorage.getItem(STORAGE_KEYS.HISTORY_LIMIT) || "100", 10);
+	if (!Number.isFinite(v) || v <= 0) return 100;
+	return Math.max(1, Math.min(500, v));
+}
+
+export function setHistoryLimit(limit: number) {
+	if (typeof window === "undefined") return;
+	const normalized = Math.max(1, Math.min(500, Number(limit) || 100));
+	localStorage.setItem(STORAGE_KEYS.HISTORY_LIMIT, String(normalized));
+}
 
 export function getRiotId(): RiotId | null {
 	if (typeof window === "undefined") return null;

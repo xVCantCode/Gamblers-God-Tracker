@@ -26,14 +26,11 @@ export const metadata: Metadata = {
 		description:
 			"Allows you to track your progress in achieving the Arena God title. Automatically tracks your wins in arena too.",
 		type: "website",
-		url: "https://www.arenagod.click/",
+		url: "/",
 		siteName: "ArenaGod.click",
 		images: [
 			{
-				url: "https://www.arenagod.click/og-image.png",
-				width: 1200,
-				height: 630,
-				type: "image/png",
+				url: "/og-image.png",
 				alt: "ArenaGod",
 			},
 		],
@@ -43,7 +40,7 @@ export const metadata: Metadata = {
 		title: "Arena God Tracker",
 		description:
 			"Allows you to track your progress in achieving the Arena God title. Automatically tracks your wins in arena too.",
-		images: ["https://www.arenagod.click/og-image.png"],
+		images: ["/og-image.png"],
 	},
 	icons: {
 		icon: "/favicon.ico",
