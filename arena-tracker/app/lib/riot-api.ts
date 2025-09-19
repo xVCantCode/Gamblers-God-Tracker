@@ -236,23 +236,27 @@ export function getPlayerMatchResult(
 
 	// Try to read Arena augment IDs from common participant fields
 	// Known field patterns include: playerAugment1..4 (numbers), or an 'augments' array in some payloads.
-	const pAny = player as unknown as Record<string, any>;
+	const pObj = player as unknown as Record<string, unknown>;
 	const possibleAugments: Array<number | undefined> = [
-		pAny.playerAugment1,
-		pAny.playerAugment2,
-		pAny.playerAugment3,
-		pAny.playerAugment4,
+		typeof pObj["playerAugment1"] === 'number' ? (pObj["playerAugment1"] as number) : undefined,
+		typeof pObj["playerAugment2"] === 'number' ? (pObj["playerAugment2"] as number) : undefined,
+		typeof pObj["playerAugment3"] === 'number' ? (pObj["playerAugment3"] as number) : undefined,
+		typeof pObj["playerAugment4"] === 'number' ? (pObj["playerAugment4"] as number) : undefined,
 	];
 	let augments: number[] | undefined = possibleAugments
 		.filter((v) => typeof v === 'number' && isFinite(v) && v > 0)
 		.map((v) => v as number);
 	// Fallback: some payloads might include an array
-	if ((!augments || augments.length === 0) && Array.isArray(pAny.augments)) {
-		augments = (pAny.augments as any[]).filter((v) => typeof v === 'number');
+	if (!augments || augments.length === 0) {
+		const maybeAug = (pObj as { augments?: unknown }).augments;
+		if (Array.isArray(maybeAug)) {
+			const nums = maybeAug.filter((v): v is number => typeof v === 'number');
+			if (nums.length > 0) augments = nums;
+		}
 	}
 
 	// Try to read Arena score from common fields
-	const score: number | undefined = [pAny.arenaScore, pAny.score, pAny.cherryScore]
+	const score: number | undefined = [pObj["arenaScore"], pObj["score"], pObj["cherryScore"]]
 		.find((v) => typeof v === 'number');
 
 	const result = {

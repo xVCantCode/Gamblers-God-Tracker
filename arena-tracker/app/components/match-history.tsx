@@ -83,27 +83,47 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 				const endpoints = [
 					"https://raw.communitydragon.org/15.18/cdragon/arena/en_us.json",
 				];
-				let data: any = null;
+				let raw: unknown = null;
 				let assetBase = "https://raw.communitydragon.org/latest";
 				for (const url of endpoints) {
 					try {
 						const res = await fetch(url, { cache: "force-cache" });
 						if (res.ok) {
-							data = await res.json();
+							raw = await res.json();
 							const idx = url.indexOf("/cdragon/");
 							if (idx > -1) assetBase = url.substring(0, idx);
 							break;
 						}
 					} catch {}
 				}
-				if (!data) return;
-				const items: any[] = Array.isArray(data)
-					? data
-					: Array.isArray((data as any).augments)
-						? (data as any).augments
-						: Array.isArray((data as any).Augments)
-							? (data as any).Augments
-							: [];
+				if (!raw) return;
+				type CDragonAugment = {
+					id?: number;
+					AugmentId?: number;
+					name?: string;
+					Name?: string;
+					description?: string;
+					desc?: string;
+					Desc?: string;
+					tooltip?: string;
+					iconPath?: string;
+					icon?: string;
+					Icon?: string;
+					iconLargePath?: string;
+					iconLarge?: string;
+					IconLarge?: string;
+				};
+				let items: CDragonAugment[] = [];
+				if (Array.isArray(raw)) {
+					items = raw as CDragonAugment[];
+				} else if (typeof raw === "object" && raw !== null) {
+					const obj = raw as { augments?: unknown; Augments?: unknown };
+					if (Array.isArray(obj.augments)) {
+						items = obj.augments as CDragonAugment[];
+					} else if (Array.isArray(obj.Augments)) {
+						items = obj.Augments as CDragonAugment[];
+					}
+				}
 				const map: Record<number, { name?: string; desc?: string; icon: string; iconLarge?: string }> = {};
 				for (const it of items) {
 					const id = typeof it?.id === "number" ? it.id : typeof it?.AugmentId === "number" ? it.AugmentId : undefined;
@@ -248,40 +268,43 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 				const uncachedMatchIds = batch.filter(id => !cachedMatches[id]);
 				
 				// Process cached matches immediately
-				const cachedResults = Object.entries(cachedMatches).map(([matchId, matchInfo]) => {
+				const cachedResults: (MatchResult & { isNewMatch: boolean })[] = [];
+				for (const [matchId, matchInfo] of Object.entries(cachedMatches)) {
 					const result = getPlayerMatchResult(matchInfo, accountData.puuid);
-					return result ? { ...result, matchId, isNewMatch: false } : null;
-				}).filter(result => result !== null);
+					if (result) {
+						cachedResults.push({ ...result, matchId, isNewMatch: false });
+					}
+				}
 				
 				// Only fetch uncached matches from API
-				const newMatchesCache: Record<string, MatchInfo> = {};
-				const batchPromises = uncachedMatchIds.map(async (matchId) => {
-					// Fetch from API
-					const matchInfo = await getMatchInfo(matchId);
-					if ("error" in matchInfo || !matchInfo.data) return null;
+                const newMatchesCache: Record<string, MatchInfo> = {};
+                const batchPromises: Promise<(MatchResult & { matchId: string; isNewMatch: boolean }) | null>[] = uncachedMatchIds.map(async (matchId) => {
+                    // Fetch from API
+                    const matchInfo = await getMatchInfo(matchId);
+                    if ("error" in matchInfo || !matchInfo.data) return null;
 
-					// Store for batch caching
-					newMatchesCache[matchId] = matchInfo.data;
+                    // Store for batch caching
+                    newMatchesCache[matchId] = matchInfo.data;
 
-					const result = getPlayerMatchResult(
-						matchInfo.data,
-						accountData.puuid
-					);
-					if (result) {
-						return {
-							...result,
-							matchId,
-							isNewMatch: true,
-						};
-					}
-					return null;
-				});
+                    const result = getPlayerMatchResult(
+                        matchInfo.data,
+                        accountData.puuid
+                    );
+                    if (result) {
+                        return {
+                            ...result,
+                            matchId,
+                            isNewMatch: true,
+                        };
+                    }
+                    return null;
+                });
 
-				const batchResults = await Promise.all(batchPromises);
-				const validNewResults = batchResults.filter(
-					(result): result is MatchResult & { isNewMatch: boolean } =>
-						result !== null
-				);
+                const batchResults = await Promise.all(batchPromises);
+                const validNewResults = batchResults.filter(
+                    (result): result is MatchResult & { matchId: string; isNewMatch: boolean } =>
+                        result !== null
+                );
 				
 				// Batch cache new matches for better performance
 				if (Object.keys(newMatchesCache).length > 0) {
@@ -416,28 +439,25 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 	      const cachedMatches = getCachedMatches(batch);
 	      const uncached = batch.filter(id => !cachedMatches[id]);
  
-	      const cachedResults = Object.entries(cachedMatches)
-	        .map(([id, info]) => {
-	          const r = getPlayerMatchResult(info, accountData.puuid);
-	          return r ? { ...r, matchId: id } : null;
-	        })
-	        .filter((r): r is MatchResult => r !== null);
-
-	      const newMatchesCache: Record<string, MatchInfo> = {};
-	      const fetched = await Promise.all(
-	        uncached.map(async id => {
-	          const info = await getMatchInfo(id);
-	          if ("error" in info || !info.data) return null;
-	          newMatchesCache[id] = info.data;
-	          const r = getPlayerMatchResult(info.data, accountData.puuid);
-	          return r ? { ...r, matchId: id } : null;
-	        })
-	      );
-	      const fetchedResults = fetched.filter((r): r is MatchResult => r !== null);
- 
-	      if (Object.keys(newMatchesCache).length > 0) {
-	        cacheMatches(newMatchesCache);
+	      const cachedResults: MatchResult[] = [];
+	      for (const [id, info] of Object.entries(cachedMatches)) {
+	        const r = getPlayerMatchResult(info, accountData.puuid);
+	        if (r) cachedResults.push({ ...r, matchId: id });
 	      }
+ 
+	      const newMatchesCache: Record<string, MatchInfo> = {};
+	      const fetchedResults: MatchResult[] = [];
+	      for (const id of uncached) {
+        const info = await getMatchInfo(id);
+        if ("error" in info || !info.data) continue;
+        newMatchesCache[id] = info.data;
+        const r = getPlayerMatchResult(info.data, accountData.puuid);
+        if (r) fetchedResults.push({ ...r, matchId: id });
+      }
+ 
+      if (Object.keys(newMatchesCache).length > 0) {
+        cacheMatches(newMatchesCache);
+      }
  
 	      results.push(...cachedResults, ...fetchedResults);
 	      // rate limit safety
@@ -504,7 +524,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 	}, [matchHistory]);
  	
  	// Provide function to rebuild arena progress from history (hoisted)
- 	function rebuildArenaProgressFromHistory(allMatches: MatchResult[]) {
+ 	const rebuildArenaProgressFromHistory = useCallback((allMatches: MatchResult[]) => {
  	  // Respect a season cutoff if set
  	  const seasonStartId = getFirstSeasonMatchId();
  	  let matchesToCount = allMatches;
@@ -524,23 +544,23 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
  	  const championsPlayed = new Set<string>();
  	  const championsWithWins = new Set<string>();
  	  const championsWithTop4s = new Set<string>();
- 
+
  	  matchesToCount.forEach(match => {
  	    championsPlayed.add(match.champion);
  	    if (match.placement === 1) championsWithWins.add(match.champion);
  	    if (match.placement <= 4) championsWithTop4s.add(match.champion);
  	  });
- 
+
  	  const newProgress = {
  	    firstPlays: Array.from(championsPlayed),
  	    wins: Array.from(championsWithWins),
  	    top4s: Array.from(championsWithTop4s),
  	    firstPlaceChampions: Array.from(championsWithWins),
  	  };
- 
+
  	  setArenaProgress(newProgress);
- 	}
- 	
+ 	}, [historyScope, historyLimit]);
+
  	// Build LeagueOfGraphs match URL using Riot match ID
  	const buildLeagueOfGraphsMatchUrl = useCallback((matchId: string) => {
  	  const [prefix, rest] = matchId.split("_");
