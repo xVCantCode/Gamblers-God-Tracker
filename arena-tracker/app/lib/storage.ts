@@ -58,6 +58,7 @@ export function getMatchHistory(): MatchResult[] {
 
 export function setMatchHistory(history: MatchResult[]) {
 	if (typeof window === "undefined") return;
+	// Store full history as requested (no trimming)
 	localStorage.setItem(STORAGE_KEYS.MATCH_HISTORY, JSON.stringify(history));
 }
 
@@ -91,26 +92,154 @@ export function setArenaProgress(progress: ArenaProgress) {
 	} catch {}
 }
 
+// =====================
+// IndexedDB (MATCH_CACHE)
+// =====================
+
+// We store large match payloads in IndexedDB to avoid localStorage quota issues.
+// Object store: "matches" with keyPath "id" and value { id: string, data: MatchInfo }
+
+let dbPromise: Promise<IDBDatabase> | null = null;
+let migrationPromise: Promise<void> | null = null;
+
+function openDB(): Promise<IDBDatabase> {
+	if (typeof window === "undefined") return Promise.reject(new Error("No window"));
+	if (dbPromise) return dbPromise;
+	dbPromise = new Promise((resolve, reject) => {
+		const req = indexedDB.open("arena-tracker", 1);
+		req.onupgradeneeded = () => {
+			const db = req.result;
+			if (!db.objectStoreNames.contains("matches")) {
+				db.createObjectStore("matches", { keyPath: "id" });
+			}
+		};
+		req.onsuccess = () => resolve(req.result);
+		req.onerror = () => reject(req.error || new Error("Failed to open IndexedDB"));
+	});
+	return dbPromise;
+}
+
+function withStore<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => Promise<T>): Promise<T> {
+	return openDB().then((db) => {
+		return new Promise<T>((resolve, reject) => {
+			const tx = db.transaction("matches", mode);
+			const store = tx.objectStore("matches");
+			fn(store)
+				.then((res) => {
+					tx.oncomplete = () => resolve(res);
+					tx.onerror = () => reject(tx.error || new Error("TX failed"));
+				})
+				.catch(reject);
+		});
+	});
+}
+
+function reqToPromise<T = unknown>(req: IDBRequest<T>): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		req.onsuccess = () => resolve(req.result as T);
+		req.onerror = () => reject(req.error || new Error("IDB request failed"));
+	});
+}
+
+async function ensureMigration() {
+	if (typeof window === "undefined") return;
+	if (migrationPromise) return migrationPromise;
+	migrationPromise = (async () => {
+		const legacy = localStorage.getItem(STORAGE_KEYS.MATCH_CACHE);
+		if (!legacy) return;
+		try {
+			const parsed: Record<string, MatchInfo> = JSON.parse(legacy);
+			if (parsed && typeof parsed === "object") {
+				await withStore("readwrite", async (store) => {
+					for (const [id, data] of Object.entries(parsed)) {
+						const value = { id, data: slimMatchInfo(data) } as { id: string; data: MatchInfo };
+						await reqToPromise(store.put(value));
+					}
+					return undefined as unknown as void;
+				});
+			}
+		} catch {
+			// ignore corrupt legacy data
+		} finally {
+			try { localStorage.removeItem(STORAGE_KEYS.MATCH_CACHE); } catch {}
+		}
+	})();
+	return migrationPromise;
+}
+
+// Safely parse match cache from legacy localStorage (still used by backup migration only)
 export function getMatchCache(): Record<string, MatchInfo> {
 	if (typeof window === "undefined") return {};
-	const stored = localStorage.getItem(STORAGE_KEYS.MATCH_CACHE);
-	return stored ? JSON.parse(stored) : {};
-}
-
-export function cacheMatches(matches: Record<string, MatchInfo>) {
-	if (typeof window === "undefined") return;
-	const current = getMatchCache();
-	const updated = { ...current, ...matches };
-	localStorage.setItem(STORAGE_KEYS.MATCH_CACHE, JSON.stringify(updated));
-}
-
-export function getCachedMatches(matchIds: string[]): Record<string, MatchInfo> {
-	const cache = getMatchCache();
-	const result: Record<string, MatchInfo> = {};
-	for (const id of matchIds) {
-		if (cache[id]) result[id] = cache[id];
+	try {
+		const stored = localStorage.getItem(STORAGE_KEYS.MATCH_CACHE);
+		return stored ? JSON.parse(stored) : {};
+	} catch {
+		try { localStorage.removeItem(STORAGE_KEYS.MATCH_CACHE); } catch {}
+		return {};
 	}
-	return result;
+}
+
+// Build a minimal MatchInfo object keeping only fields required by getPlayerMatchResult
+function slimMatchInfo(match: MatchInfo): MatchInfo {
+	const participants = match.info.participants.map((p) => {
+		const base: Record<string, unknown> = {
+			puuid: (p as unknown as Record<string, unknown>)["puuid"],
+			championName: (p as unknown as Record<string, unknown>)["championName"],
+			placement: (p as unknown as Record<string, unknown>)["placement"],
+		};
+		const pobj = p as unknown as Record<string, unknown>;
+		const augKeys = ["playerAugment1", "playerAugment2", "playerAugment3", "playerAugment4"] as const;
+		for (const k of augKeys) {
+			if (typeof pobj[k] === "number") base[k] = pobj[k] as number;
+		}
+		const maybeAug = pobj["augments"];
+		if (Array.isArray(maybeAug)) {
+			const nums = (maybeAug as unknown[]).filter((v): v is number => typeof v === "number");
+			if (nums.length > 0) base["augments"] = nums;
+		}
+		for (const k of ["arenaScore", "score", "cherryScore"] as const) {
+			if (typeof pobj[k] === "number") base[k] = pobj[k] as number;
+		}
+		return base;
+	});
+	const slim = { info: { gameCreation: match.info.gameCreation, participants } } as unknown as MatchInfo;
+	return slim;
+}
+
+function sortIdsByNewest(cache: Record<string, MatchInfo>): string[] {
+	return Object.keys(cache).sort((a, b) => {
+		const ta = cache[a]?.info?.gameCreation ?? 0;
+		const tb = cache[b]?.info?.gameCreation ?? 0;
+		return tb - ta; // newest first
+	});
+}
+
+// New: IndexedDB-backed cache APIs
+export async function cacheMatches(matches: Record<string, MatchInfo>) {
+	if (typeof window === "undefined") return;
+	await ensureMigration();
+	// Slim down new payloads before storing
+	const entries = Object.entries(matches).map(([id, info]) => ({ id, data: slimMatchInfo(info) }));
+	await withStore("readwrite", async (store) => {
+		for (const entry of entries) {
+			await reqToPromise(store.put(entry));
+		}
+		return undefined as unknown as void;
+	});
+}
+
+export async function getCachedMatches(matchIds: string[]): Promise<Record<string, MatchInfo>> {
+	if (typeof window === "undefined") return {};
+	await ensureMigration();
+	const out: Record<string, MatchInfo> = {};
+	await withStore("readonly", async (store) => {
+		for (const id of matchIds) {
+			const row = await reqToPromise<{ id: string; data: MatchInfo } | undefined>(store.get(id));
+			if (row && row.data) out[id] = row.data;
+		}
+		return undefined as unknown as void;
+	});
+	return out;
 }
 
 export function clearMatchHistory() {
@@ -118,20 +247,16 @@ export function clearMatchHistory() {
 	localStorage.removeItem(STORAGE_KEYS.MATCH_HISTORY);
 }
 
-// New helper: remove a list of match IDs from the match cache
-export function removeFromMatchCache(matchIds: string[]) {
+// Remove a list of match IDs from the match cache (IndexedDB)
+export async function removeFromMatchCache(matchIds: string[]) {
 	if (typeof window === "undefined") return;
-	const cache = getMatchCache();
-	let changed = false;
-	for (const id of matchIds) {
-		if (id in cache) {
-			delete cache[id];
-			changed = true;
+	await ensureMigration();
+	await withStore("readwrite", async (store) => {
+		for (const id of matchIds) {
+			await reqToPromise(store.delete(id));
 		}
-	}
-	if (changed) {
-		localStorage.setItem(STORAGE_KEYS.MATCH_CACHE, JSON.stringify(cache));
-	}
+		return undefined as unknown as void;
+	});
 }
 
 export function getFirstSeasonMatchId(): string | null {
@@ -144,12 +269,17 @@ export function setFirstSeasonMatchId(matchId: string) {
 	localStorage.setItem(STORAGE_KEYS.FIRST_SEASON_MATCH, matchId);
 }
 
-export function clearAllMatchData() {
+export async function clearAllMatchData() {
 	if (typeof window === "undefined") return;
 	localStorage.removeItem(STORAGE_KEYS.MATCH_HISTORY);
-	localStorage.removeItem(STORAGE_KEYS.MATCH_CACHE);
 	localStorage.removeItem(STORAGE_KEYS.ARENA_PROGRESS);
 	localStorage.removeItem(STORAGE_KEYS.FIRST_SEASON_MATCH);
+	// Clear IndexedDB match cache
+	await ensureMigration();
+	await withStore("readwrite", async (store) => {
+		await reqToPromise(store.clear());
+		return undefined as unknown as void;
+	});
 }
 
 // Backup/Restore helpers
@@ -161,7 +291,7 @@ export type BackupData = {
 	firstSeasonMatchId: string | null;
 };
 
-export function getBackupData(): BackupData {
+export async function getBackupData(): Promise<BackupData> {
 	if (typeof window === "undefined") {
 		return {
 			riotId: null,
@@ -171,24 +301,29 @@ export function getBackupData(): BackupData {
 			firstSeasonMatchId: null,
 		};
 	}
+	await ensureMigration();
+	// Read all cached matches from IndexedDB
+	const matchCache: Record<string, MatchInfo> = {};
+	await withStore("readonly", async (store) => {
+		const req = store.getAll();
+		const rows = await reqToPromise<Array<{ id: string; data: MatchInfo }>>(req as IDBRequest<any>);
+		for (const r of rows) matchCache[r.id] = r.data;
+		return undefined as unknown as void;
+	});
 	return {
 		riotId: getRiotId(),
 		matchHistory: getMatchHistory(),
 		arenaProgress: getArenaProgress(),
-		matchCache: getMatchCache(),
+		matchCache,
 		firstSeasonMatchId: getFirstSeasonMatchId(),
 	};
 }
 
-export function restoreBackupData(backup: BackupData) {
+export async function restoreBackupData(backup: BackupData) {
 	if (typeof window === "undefined") return;
 	try {
 		if (backup.riotId) setRiotId(backup.riotId);
 		setMatchHistory(backup.matchHistory || []);
-		localStorage.setItem(
-			STORAGE_KEYS.MATCH_CACHE,
-			JSON.stringify(backup.matchCache || {})
-		);
 		if (backup.firstSeasonMatchId) {
 			localStorage.setItem(
 				STORAGE_KEYS.FIRST_SEASON_MATCH,
@@ -197,6 +332,15 @@ export function restoreBackupData(backup: BackupData) {
 		} else {
 			localStorage.removeItem(STORAGE_KEYS.FIRST_SEASON_MATCH);
 		}
+		// Write match cache to IndexedDB
+		await ensureMigration();
+		const pairs = Object.entries(backup.matchCache || {}).map(([id, data]) => ({ id, data: slimMatchInfo(data) }));
+		await withStore("readwrite", async (store) => {
+			for (const p of pairs) {
+				await reqToPromise(store.put(p));
+			}
+			return undefined as unknown as void;
+		});
 		// Set progress directly; callers may still recompute from history if desired
 		if (backup.arenaProgress) setArenaProgress(backup.arenaProgress);
 	} catch (e) {

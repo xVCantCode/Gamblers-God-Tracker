@@ -175,6 +175,44 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 		setInitialized(true);
 	}, []);
 
+	// Provide function to rebuild arena progress from history (hoisted)
+	const rebuildArenaProgressFromHistory = useCallback((allMatches: MatchResult[]) => {
+	  // Respect a season cutoff if set
+	  const seasonStartId = getFirstSeasonMatchId();
+	  let matchesToCount = allMatches;
+	  if (seasonStartId) {
+	    const idx = allMatches.findIndex(m => m.matchId === seasonStartId);
+	    if (idx >= 0) {
+	      matchesToCount = allMatches.slice(0, idx + 1);
+	    }
+	  }
+	
+	  // Apply history scope limiting (All time vs Last N games)
+	  if (historyScope === "last_n") {
+	    const n = Math.max(1, Math.min(500, Number(historyLimit) || 100));
+	    matchesToCount = matchesToCount.slice(0, n);
+	  }
+
+	  const championsPlayed = new Set<string>();
+	  const championsWithWins = new Set<string>();
+	  const championsWithTop4s = new Set<string>();
+
+	  matchesToCount.forEach(match => {
+	    championsPlayed.add(match.champion);
+	    if (match.placement === 1) championsWithWins.add(match.champion);
+	    if (match.placement <= 4) championsWithTop4s.add(match.champion);
+	  });
+
+	  const newProgress = {
+	    firstPlays: Array.from(championsPlayed),
+	    wins: Array.from(championsWithWins),
+	    top4s: Array.from(championsWithTop4s),
+	    firstPlaceChampions: Array.from(championsWithWins),
+	  };
+
+	  setArenaProgress(newProgress);
+	}, [historyScope, historyLimit]);
+
 	const handleUpdate = useCallback(async (loadMore: boolean = false) => {
 		if (!gameName || !tagLine) {
 			setError("Please enter both game name and tag line");
@@ -264,7 +302,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 				}
 				
 				// Check cache for entire batch first
-				const cachedMatches = getCachedMatches(batch);
+				const cachedMatches = await getCachedMatches(batch);
 				const uncachedMatchIds = batch.filter(id => !cachedMatches[id]);
 				
 				// Process cached matches immediately
@@ -308,7 +346,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 				
 				// Batch cache new matches for better performance
 				if (Object.keys(newMatchesCache).length > 0) {
-					cacheMatches(newMatchesCache);
+					await cacheMatches(newMatchesCache);
 				}
 				
 				// Combine cached and new results
@@ -362,7 +400,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 			setIsLoading(false);
 			setIsLoadingMore(false);
 		}
-	}, [gameName, tagLine, matchCount, startIndex, matchHistory, historyScope, historyLimit]);
+	}, [gameName, tagLine, matchCount, startIndex, matchHistory, rebuildArenaProgressFromHistory]);
 
 	// Auto-load data for Gambler#Adict on first visit
 	useEffect(() => {
@@ -436,7 +474,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 	    for (let i = 0; i < idsToProcess.length; i += BATCH_SIZE) {
 	      const batch = idsToProcess.slice(i, i + BATCH_SIZE);
  
-	      const cachedMatches = getCachedMatches(batch);
+	      const cachedMatches = await getCachedMatches(batch);
 	      const uncached = batch.filter(id => !cachedMatches[id]);
  
 	      const cachedResults: MatchResult[] = [];
@@ -456,7 +494,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
       }
  
       if (Object.keys(newMatchesCache).length > 0) {
-        cacheMatches(newMatchesCache);
+        await cacheMatches(newMatchesCache);
       }
  
 	      results.push(...cachedResults, ...fetchedResults);
@@ -491,7 +529,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 	  } catch (e) {
 	    console.error("Auto-refresh failed:", e);
 	  }
-	}, [gameName, tagLine, matchHistory, historyScope, historyLimit]);
+	}, [gameName, tagLine, matchHistory, rebuildArenaProgressFromHistory]);
 
 	// NEW: drop past games (start fresh from a selected match or the most recent by default)
 	const handleDropPastGames = useCallback((cutoffMatchId?: string) => {
@@ -513,7 +551,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 	  } catch {}
 	  const removedIds = matchHistory.slice(idx + 1).map(m => m.matchId);
 	  if (removedIds.length > 0) {
-	    try { removeFromMatchCache(removedIds); } catch {}
+	     try { (async () => { await removeFromMatchCache(removedIds); })(); } catch {}
 	  }
 	  const trimmed = matchHistory.slice(0, idx + 1);
 	  setMatchHistoryState(trimmed);
@@ -521,45 +559,8 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 	  setHasMoreMatches(false);
 	  rebuildArenaProgressFromHistory(trimmed);
 	  setStatus(`Dropped ${removedIds.length} older match(es). Tracking from the selected match onward.`);
-	}, [matchHistory]);
+	}, [matchHistory, rebuildArenaProgressFromHistory]);
  	
- 	// Provide function to rebuild arena progress from history (hoisted)
- 	const rebuildArenaProgressFromHistory = useCallback((allMatches: MatchResult[]) => {
- 	  // Respect a season cutoff if set
- 	  const seasonStartId = getFirstSeasonMatchId();
- 	  let matchesToCount = allMatches;
- 	  if (seasonStartId) {
- 	    const idx = allMatches.findIndex(m => m.matchId === seasonStartId);
- 	    if (idx >= 0) {
- 	      matchesToCount = allMatches.slice(0, idx + 1);
- 	    }
- 	  }
- 
- 	  // Apply history scope limiting (All time vs Last N games)
- 	  if (historyScope === "last_n") {
- 	    const n = Math.max(1, Math.min(500, Number(historyLimit) || 100));
- 	    matchesToCount = matchesToCount.slice(0, n);
- 	  }
-
- 	  const championsPlayed = new Set<string>();
- 	  const championsWithWins = new Set<string>();
- 	  const championsWithTop4s = new Set<string>();
-
- 	  matchesToCount.forEach(match => {
- 	    championsPlayed.add(match.champion);
- 	    if (match.placement === 1) championsWithWins.add(match.champion);
- 	    if (match.placement <= 4) championsWithTop4s.add(match.champion);
- 	  });
-
- 	  const newProgress = {
- 	    firstPlays: Array.from(championsPlayed),
- 	    wins: Array.from(championsWithWins),
- 	    top4s: Array.from(championsWithTop4s),
- 	    firstPlaceChampions: Array.from(championsWithWins),
- 	  };
-
- 	  setArenaProgress(newProgress);
- 	}, [historyScope, historyLimit]);
 
  	// Build LeagueOfGraphs match URL using Riot match ID
  	const buildLeagueOfGraphsMatchUrl = useCallback((matchId: string) => {
@@ -698,8 +699,8 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
  	          Clear Matches
  	        </button>
  	        <button
- 	          onClick={() => {
- 	            clearAllMatchData();
+ 	          onClick={async () => {
+ 	            await clearAllMatchData();
  	            setMatchHistoryState([]);
  	            setHasMoreMatches(true);
  	            setStartIndex(0);
@@ -869,9 +870,9 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
  	);
 }
 
-export function handleExportBackup() {
+export async function handleExportBackup() {
 	try {
-		const backup = getBackupData();
+		const backup = await getBackupData();
 		const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement("a");
@@ -881,25 +882,45 @@ export function handleExportBackup() {
 		a.click();
 		document.body.removeChild(a);
 		URL.revokeObjectURL(url);
-		// Optional feedback without relying on component state
 		if (typeof window !== "undefined") {
 			console.log("Backup downloaded.");
 		}
 	} catch (e) {
 		console.error(e);
-		// Optional feedback without relying on component state
 		if (typeof window !== "undefined") {
 			alert("Failed to export backup");
 		}
 	}
 }
 
+export function handleImportBackup_OLD(file: File) {
+	const reader = new FileReader();
+  // reader.onload = () => { (old)
+  reader.onload = async () => {
+    try {
+      const json = JSON.parse(String(reader.result || "{}"));
+      // restoreBackupData(json); (old)
+      await restoreBackupData(json);
+      // Reload to ensure UI picks up restored data
+      if (typeof window !== "undefined") {
+        window.location.reload();
+      }
+    } catch (e) {
+      console.error(e);
+      if (typeof window !== "undefined") {
+        alert("Failed to import backup: invalid file");
+      }
+    }
+  };
+  reader.readAsText(file);
+}
+
 export function handleImportBackup(file: File) {
 	const reader = new FileReader();
-	reader.onload = () => {
+	reader.onload = async () => {
 		try {
 			const json = JSON.parse(String(reader.result || "{}"));
-			restoreBackupData(json);
+			await restoreBackupData(json);
 			// Reload to ensure UI picks up restored data
 			if (typeof window !== "undefined") {
 				window.location.reload();

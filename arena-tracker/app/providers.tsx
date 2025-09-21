@@ -9,6 +9,28 @@ import posthog from "posthog-js";
 import { PostHogProvider as PHProvider } from "posthog-js/react";
 
 export function PostHogProvider({ children }: { children: React.ReactNode }) {
+	// Request persistent storage to reduce eviction risk for IndexedDB/local caches
+	useEffect(() => {
+		(async () => {
+			try {
+				if (typeof navigator !== "undefined" && "storage" in navigator && navigator.storage) {
+					const storage = navigator.storage;
+					const alreadyPersisted = await (storage.persisted?.() ?? Promise.resolve(false));
+					if (!alreadyPersisted && storage.persist) {
+						const granted = await storage.persist();
+						if (granted) {
+							console.log("Storage persistence granted.");
+						} else {
+							console.log("Storage persistence not granted.");
+						}
+					}
+				}
+			} catch (e) {
+				console.warn("Requesting persistent storage failed", e);
+			}
+		})();
+	}, []);
+
 	useEffect(() => {
 		if (process.env.NODE_ENV === "development") {
 			return;
