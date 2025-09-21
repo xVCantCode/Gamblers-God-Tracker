@@ -206,13 +206,6 @@ function slimMatchInfo(match: MatchInfo): MatchInfo {
 	return slim;
 }
 
-function sortIdsByNewest(cache: Record<string, MatchInfo>): string[] {
-	return Object.keys(cache).sort((a, b) => {
-		const ta = cache[a]?.info?.gameCreation ?? 0;
-		const tb = cache[b]?.info?.gameCreation ?? 0;
-		return tb - ta; // newest first
-	});
-}
 
 // New: IndexedDB-backed cache APIs
 export async function cacheMatches(matches: Record<string, MatchInfo>) {
@@ -305,8 +298,8 @@ export async function getBackupData(): Promise<BackupData> {
 	// Read all cached matches from IndexedDB
 	const matchCache: Record<string, MatchInfo> = {};
 	await withStore("readonly", async (store) => {
-		const req = store.getAll();
-		const rows = await reqToPromise<Array<{ id: string; data: MatchInfo }>>(req as IDBRequest<any>);
+		const req = store.getAll() as IDBRequest<Array<{ id: string; data: MatchInfo }>>;
+		const rows = await reqToPromise<Array<{ id: string; data: MatchInfo }>>(req);
 		for (const r of rows) matchCache[r.id] = r.data;
 		return undefined as unknown as void;
 	});
