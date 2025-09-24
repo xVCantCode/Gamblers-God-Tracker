@@ -81,7 +81,7 @@ export function MatchHistory({ images, filterChampion, onClearChampionFilter }: 
 		async function loadAugments() {
 			try {
 				const endpoints = [
-					"https://raw.communitydragon.org/15.18/cdragon/arena/en_us.json",
+					"https://raw.communitydragon.org/15.19/cdragon/arena/en_us.json",
 				];
 				let raw: unknown = null;
 				let assetBase = "https://raw.communitydragon.org/latest";
