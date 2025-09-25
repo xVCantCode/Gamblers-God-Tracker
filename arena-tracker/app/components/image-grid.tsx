@@ -282,6 +282,18 @@ export function ImageGrid({ images, displayImages = images, onOpenChampionHistor
 											: (isCompleted ? "opacity-100" : "opacity-50")
 										} group-hover:opacity-100`}
 									sizes="(max-width: 640px) 50vw, (max-width: 768px) 33vw, (max-width: 1024px) 25vw, 20vw"
+									onError={(e) => {
+										// Hide the image on error and show a placeholder
+										const target = e.target as HTMLImageElement;
+										target.style.display = 'none';
+										const parent = target.parentElement;
+										if (parent && !parent.querySelector('.image-error-placeholder')) {
+											const placeholder = document.createElement('div');
+											placeholder.className = 'image-error-placeholder absolute inset-0 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center';
+											placeholder.innerHTML = '<span class="text-gray-500 text-2xl">?</span>';
+											parent.appendChild(placeholder);
+										}
+									}}
 								/>
 
 								<div className="absolute top-2 left-2 flex flex-col gap-1">
